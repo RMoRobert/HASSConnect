@@ -1,0 +1,31 @@
+{
+   "packageName": "HASSConnect - Home Assistant Integration",
+   "minimumHEVersion": "2.2.1",
+   "author": "Robert Morris",
+   "dateReleased": "2021-02-06",
+   "communityLink": "https://community.hubitat.com/t/COMING-SOON",
+   "licenseFile": "",
+   "releaseNotes": "Initial release. Beta quality; see forum thread for more details.",
+   "apps": [
+      {
+         "id": "c497b8b-e3ae-4d91-85b6-96b8b047b094",
+         "name": "HASSConnect - Home Assistant Integration",
+         "namespace": "RMoRobert",
+         "location": "https://raw.githubusercontent.com/RMoRobert/HASSConnect/main/apps/hassconnect-app.groovy",
+         "required": true,
+         "version": "0.9.0",
+         "primary": true,
+         "oauth": false
+      }
+   ],
+   "drivers": [
+      {
+         "id": "b0fab60e-1e19-453a-9852-5c88d39a7893",
+         "name": "CoCoHue Bridge",
+         "namespace": "RMoRobert",
+         "location": "https://raw.githubusercontent.com/RMoRobert/HASSConnect/main/drivers/hasconnect-hub.groovy",
+         "version": "0.9.0",
+         "required": true
+      }
+   ]
+}
