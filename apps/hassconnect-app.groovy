@@ -55,11 +55,6 @@ preferences {
    page name: "pageTestConnection"
    page name: "pageManageHub"
    page name: "pageSelectDevices"
-   page name: "pageSelectLights"
-   page name: "pageSelectGroups"
-   page name: "pageSelectSwitches"
-   page name: "pageSelectMotionSensors"
-   page name: "pageSelectLabsActivators"
 }
 
 void installed() {
@@ -100,28 +95,22 @@ void debugOff() {
 }
 
 def pageFirstPage() {
-   if (!(state.addedHub)) {
-      if (enableDebug) log.debug "Creating hub device or ensuring was already created..."
+   com.hubitat.app.ChildDeviceWrapper hubDev = getChildDevice("Hc/${app.id}")
+   if (hubDev == null) {
+      if (enableDebug) log.debug "Preparing to create hub device..."
       if (settings["ipAddress"] && settings["port"] && settings["accessToken"]) {
          if (enableDebug) log.debug "All hub information present"
-         com.hubitat.app.ChildDeviceWrapper dev = getChildDevice("Hc/${app.id}")
-         if (dev != null) {
-            if (enableDebug) log.debug "Child hub device found; not creating."
-         }
-         else {
-            if (enableDebug) log.debug "Creating child device..."
-            Map devProps = [name: """HASSConnect HASS Hub${nickname ? " - ${nickname} " : ""}"""]
-            dev = addChildDevice(childNamespace, "HASSConnect Home Assistant Hub", "Hc/${app.id}", devProps)
-         }
-         if (dev != null) {
+         if (enableDebug) log.debug "Creating child device..."
+         Map devProps = [name: """HASSConnect HASS Hub${nickname ? " - ${nickname} " : ""}"""]
+         hubDev = addChildDevice(childNamespace, "HASSConnect Home Assistant Hub", "Hc/${app.id}", devProps)
+         if (hubDev != null) {
             if (enableDebug) log.debug "Updating child device data..."
-            dev.updateSetting("ipAddress", [value: ipAddress, type: "string"])
-            dev.updateSetting("port", [value: port, type: "number"])
-            dev.updateSetting("accessToken", [value: accessToken, type: "string"])
-            state.addedHub = true
+            hubDev.updateSetting("ipAddress", [value: ipAddress, type: "string"])
+            hubDev.updateSetting("port", [value: port, type: "number"])
+            hubDev.updateSetting("accessToken", [value: accessToken, type: "number"])
          }
          else {
-            log.warn "HASSConnect hub device not found and could not be created"
+            log.error "HASSConnect hub device not found and could not be created"
          }
       }
       else {
@@ -137,7 +126,7 @@ def pageFirstPage() {
       }
    }
    else {
-      if (settings["ipAddress"] && settings["port"] && settings["accessToken"] && state.addedHub) {
+      if (settings["ipAddress"] && settings["port"] && settings["accessToken"] && hubDev != null) {
          return pageManageHub()
       }
       else {
@@ -148,9 +137,12 @@ def pageFirstPage() {
 
 def pageAddHub() {
    logDebug("pageAddHub()...")
-   state.addedHub = false
+   com.hubitat.app.ChildDeviceWrapper hubDev = getChildDevice("Hc/${app.id}")
    dynamicPage(name: "pageAddHub", uninstall: true, install: false, nextPage: "pageFirstPage") {
       section("Connect to Home Assistant") {
+         if (hubDev != null) {
+            paragraph "NOTE: Hub device already detected on Hubitat. Editing the below may fail; try editing the hub device directly if any of the below fails."
+         }
          input name: "nickname", type: "text", title: "\"Nickname\" for Home Assistant hub (optional; will be used as part of app and hub device names):"
          input name: "ipAddress", type: "string", title: "IP address", description: "Example: 192.168.0.10",
             required: true
@@ -216,7 +208,7 @@ def createNewSelectedDevices() {
       deviceSelectors?.each { selector ->
          if (settings["new${selector.key}Devices"]) {
             Map<String,String> devCache = hubDev.getCache(selector.key)
-            (settings["new${it.key}Devices"]).each { selectedEntId ->
+            (settings["new${selector.key}Devices"]).each { selectedEntId ->
                String name = devCache.get(selectedEntId)
                if (name) {
                   try {
@@ -233,7 +225,7 @@ def createNewSelectedDevices() {
                   log.error "Unable to create new device for $selectedEntId: entity ID not found in HASS cache"
                }
             }
-            app.removeSetting("new${it.key}Devices")
+            app.removeSetting("new${selector.key}Devices")
          }
       }
    }
@@ -300,7 +292,9 @@ def pageSelectDevices(params) {
       }
       if (devCache) {
          devCache.each { cachedDev ->
-            com.hubitat.app.ChildDeviceWrapper childDev = unclaimedDevs.find { s -> s.deviceNetworkId == "Hc/${app.id}/${params.key}/${cachedDev.key}" }
+            log.trace "cachedDev = $cachedDev"
+            com.hubitat.app.ChildDeviceWrapper childDev = unclaimedDevs.find { d -> d.deviceNetworkId == "Hc/${app.id}/${params.selectorKey}/${cachedDev.key}" }
+            log.trace "childDev = $childDev"
             if (childDev) {
                addedDevs.put(cachedDev.key, [hubitatName: childDev.name, hubitatId: childDev.id, hassName: cachedDev.value])
                unclaimedDevs.removeElement(childDev)
@@ -309,6 +303,7 @@ def pageSelectDevices(params) {
                newDev << [(cachedDev.key): (cachedDev.value)]
                arrNewDevs << newDev
             }
+            log.trace "unclaimedDevs = $unclaimedDevs"
          }
          arrNewDevs = arrNewDevs.sort { a, b ->
             // Sort by friendly name name (default would be entity ID)
@@ -357,237 +352,6 @@ def pageSelectDevices(params) {
                paragraph("If you added new ${params.selectorUIName} to Home Assistant and do not see them above, click/tap the button " +
                         "below to retrieve new information from Home Assistant.")
                input(name: "btnDeviceRefresh", type: "button", title: "Refresh Device List", submitOnChange: true)
-         }
-      }
-   }
-}
-
-
-def pageSelectSwitches() {
-   com.hubitat.app.ChildDeviceWrapper hubDev = getChildDevice("Hc/${app.id}")
-   hubDev.getAllSwitches()
-   List arrNewSwitches = []
-   Map switchCache = hubDev.getAllSwitchesCache()
-   List<com.hubitat.app.ChildDeviceWrapper> unclaimedSensors = hubDev.getChildDevices().findAll { it.deviceNetworkId.startsWith("Hc/${app.id}/Switch/") }
-   dynamicPage(name: "pageSelectSwitches", refreshInterval: switchCache ? 0 : 6, uninstall: true, install: false, nextPage: "pageManageHub") {
-      Map addedSwitches = [:]  // To be populated with switches user has added, matched by HASS entity ID
-      if (!hubDev) {
-         log.error "No HASS hub device found"
-         return
-      }
-      if (switchCache) {
-         switchCache.each { cachedSw ->
-            com.hubitat.app.ChildDeviceWrapper swChild = unclaimedSensors.find { s -> s.deviceNetworkId == "Hc/${app.id}/Switch/${cachedSw.key}" }
-            if (swChild) {
-               addedSwitches.put(cachedSw.key, [hubitatName: swChild.name, hubitatId: swChild.id, hassName: cachedSw.value])
-               unclaimedSensors.removeElement(swChild)
-            } else {
-               Map newDev = [:]
-               newDev << [(cachedSw.key): (cachedSw.value)]
-               arrNewSwitches << newDev
-            }
-         }
-         arrNewSwitches = arrNewSwitches.sort { a, b ->
-            // Sort by friendly name name (default would be entity ID)
-            a.entrySet().iterator().next()?.value <=> b.entrySet().iterator().next()?.value
-         }
-         addedSwitches = addedSwitches.sort { it.value.hubitatName }
-      }
-      if (!switchCache) {
-         section("Discovering sensors. Please wait...") {
-            paragraph("Press \"Refresh\" if you see this message for an extended period of time")
-            input(name: "btnSensorRefresh", type: "button", title: "Refresh", submitOnChange: true)
-         }
-      }
-      else {
-         section("Manage Switches") {
-            input(name: "newSwitches", type: "enum", title: "Select switches to add:",
-                  multiple: true, options: arrNewSwitches)
-            paragraph ""
-            paragraph("Previously added switches${addedSwitches ? ' <span style=\"font-style: italic\">(Home Assistant name in parentheses)</span>' : ''}:")
-            if (addedSwitches) {
-               StringBuilder swText = new StringBuilder()
-               swText << "<ul>"
-               addedSwitches.each {
-                  swText << "<li><a href=\"/device/edit/${it.value.hubitatId}\" target=\"_blank\">${it.value.hubitatName}</a>"
-                  swText << " <span style=\"font-style: italic\">(${it.value.hassName ?: 'not found on Home Assistant'})</span></li>"
-                  //input(name: "btnRemove_Sensor_ID", type: "button", title: "Remove", width: 3)
-               }
-               swText << "</ul>"
-               paragraph(swText.toString())
-            }
-            else {
-               paragraph "<span style=\"font-style: italic\">No added switches found</span>"
-            }
-            if (unclaimedSensors) {
-               paragraph "Hubitat switch devices not found on Home Assistant:"
-               StringBuilder swText = new StringBuilder()
-               swText << "<ul>"
-               unclaimedSensors.each {
-                  swText << "<li><a href=\"/device/edit/${it.id}\" target=\"_blank\">${it.displayName}</a></li>"
-               }
-               swText << "</ul>"
-               paragraph(swText.toString())
-            }
-         }
-         section("Rediscover Switches") {
-               paragraph("If you added new devices to Home Assistant and do not see them above, click/tap the button " +
-                        "below to retrieve new information from Home Assistant.")
-               input(name: "btnDeviceRefresh", type: "button", title: "Refresh Sensor List", submitOnChange: true)
-         }
-      }
-   }
-}
-
-def pageSelectMotionSensors() {
-   com.hubitat.app.ChildDeviceWrapper hubDev = getChildDevice("Hc/${app.id}")
-   hubDev.getAllMotionSensors()
-   List arrNewSensors = []
-   Map sensorCache = hubDev.getAllMotionSensorsCache()
-   List<com.hubitat.app.ChildDeviceWrapper> unclaimedSensors = hubDev.getChildDevices().findAll { it.deviceNetworkId.startsWith("Hc/${app.id}/Motion/") }
-   dynamicPage(name: "pageSelectMotionSensors", refreshInterval: sensorCache ? 0 : 6, uninstall: true, install: false, nextPage: "pageManageHub") {
-      Map addedSensors = [:]  // To be populated with sensors user has added, matched by HASS entity ID
-      if (!hubDev) {
-         log.error "No HASS hub device found"
-         return
-      }
-      if (sensorCache) {
-         sensorCache.each { cachedSensor ->
-            //log.warn "* cached sensor = $cachedSensor"
-            com.hubitat.app.ChildDeviceWrapper sensorChild = unclaimedSensors.find { s -> s.deviceNetworkId == "Hc/${app.id}/Motion/${cachedSensor.key}" }
-            if (sensorChild) {
-               addedSensors.put(cachedSensor.key, [hubitatName: sensorChild.name, hubitatId: sensorChild.id, hassName: cachedSensor.value])
-               unclaimedSensors.removeElement(sensorChild)
-            } else {
-               Map newSensor = [:]
-               newSensor << [(cachedSensor.key): (cachedSensor.value)]
-               arrNewSensors << newSensor
-            }
-         }
-         arrNewSensors = arrNewSensors.sort { a, b ->
-            // Sort by sensor name (default would be entity ID)
-            a.entrySet().iterator().next()?.value <=> b.entrySet().iterator().next()?.value
-         }
-         addedSensors = addedSensors.sort { it.value.hubitatName }
-      }
-      if (!sensorCache) {
-         section("Discovering sensors. Please wait...") {
-            paragraph("Press \"Refresh\" if you see this message for an extended period of time")
-            input(name: "btnSensorRefresh", type: "button", title: "Refresh", submitOnChange: true)
-         }
-      }
-      else {
-         section("Manage Motion Sensors") {
-            input(name: "newMotionSensors", type: "enum", title: "Select motion sensors to add:",
-                  multiple: true, options: arrNewSensors)
-            paragraph ""
-            paragraph("Previously added sensors${addedSensors ? ' <span style=\"font-style: italic\">(Home Assistant name in parentheses)</span>' : ''}:")
-            if (addedSensors) {
-               StringBuilder sensorText = new StringBuilder()
-               sensorText << "<ul>"
-               addedSensors.each {
-                  sensorText << "<li><a href=\"/device/edit/${it.value.hubitatId}\" target=\"_blank\">${it.value.hubitatName}</a>"
-                  sensorText << " <span style=\"font-style: italic\">(${it.value.hassName ?: 'not found on Home Assistant'})</span></li>"
-                  //input(name: "btnRemove_Sensor_ID", type: "button", title: "Remove", width: 3)
-               }
-               sensorText << "</ul>"
-               paragraph(sensorText.toString())
-            }
-            else {
-               paragraph "<span style=\"font-style: italic\">No added sensors found</span>"
-            }
-            if (unclaimedSensors) {
-               paragraph "Hubitat sensor devices not found on Home Assistant:"
-               StringBuilder sensorText = new StringBuilder()
-               sensorText << "<ul>"
-               unclaimedSensors.each {
-                  sensorText << "<li><a href=\"/device/edit/${it.id}\" target=\"_blank\">${it.displayName}</a></li>"
-               }
-               sensorText << "</ul>"
-               paragraph(sensorText.toString())
-            }
-         }
-         section("Rediscover Sensors") {
-               paragraph("If you added new sensors to Home Assistant and do not see them above, click/tap the button " +
-                        "below to retrieve new information from Home Assistant.")
-               input(name: "btnSensorRefresh", type: "button", title: "Refresh Sensor List", submitOnChange: true)
-         }
-      }
-   }
-}
-
-def pageSelectLabsActivators() {
-   com.hubitat.app.ChildDeviceWrapper bridge = getChildDevice("CCH/${state.bridgeID}")
-   bridge.getAllLabsDevices()
-   List arrNewLabsDevs = []
-   Map labsCache = bridge.getAllLabsSensorsCache()
-   List<com.hubitat.app.ChildDeviceWrapper> unclaimedLabsDevs = getChildDevices().findAll { it.deviceNetworkId.startsWith("CCH/${state.bridgeID}/SensorRL/") }
-   dynamicPage(name: "pageSelectLabsActivators", refreshInterval: labsCache ? 0 : 6, uninstall: true, install: false, nextPage: "pageManageBridge") {
-      Map addedLabsDevs = [:]  // To be populated with lights user has added, matched by Hue ID
-      if (!bridge) {
-         log.error "No Bridge device found"
-         return
-      }
-      if (labsCache) {
-         labsCache.each { cachedLabDev ->
-            com.hubitat.app.ChildDeviceWrapper labsChild = unclaimedLabsDevs.find { d -> d.deviceNetworkId == "CCH/${state.bridgeID}/SensorRL/${cachedLabDev.key}" }
-            if (labsChild) {
-               addedLabsDevs.put(cachedLabDev.key, [hubitatName: labsChild.name, hubitatId: labsChild.id, hueName: cachedLabDev.value?.name])
-               unclaimedLabsDevs.removeElement(labsChild)
-            } else {
-               Map newLabsDev = [:]
-               newLabsDev << [(cachedLabDev.key): (cachedLabDev.value.name)]
-               arrNewLabsDevs << newLabsDev
-            }
-         }
-         arrNewLabsDevs = arrNewLabsDevs.sort { a, b ->
-            // Sort by device name (default would be Hue ID)
-            a.entrySet().iterator().next()?.value <=> b.entrySet().iterator().next()?.value
-         }
-         addedLabsDevs = addedLabsDevs.sort { it.value.hubitatName }
-      }
-      if (!labsCache) {
-         section("Discovering Hue Labs activators. Please wait...") {            
-            paragraph("Press \"Refresh\" if you see this message for an extended period of time")
-            input(name: "btnLabsRefresh", type: "button", title: "Refresh", submitOnChange: true)
-         }
-      }
-      else {
-         section("Manage Hue Labs Formula Activators") {
-            input(name: "newLabsDevs", type: "enum", title: "Select Hue Labs formula acvivators to add:",
-                  multiple: true, options: arrNewLabsDevs)
-            input(name: "boolAppendLabs", type: "bool", title: "Append \"(Hue Labs Formula)\" to Hubitat device name")
-            paragraph ""
-            paragraph("Previously added devices${addedLabsDevs ? ' <span style=\"font-style: italic\">(Hue Labs formula name on Bridge in parentheses)</span>' : ''}:")
-            if (addedLabsDevs) {
-               StringBuilder labDevsText = new StringBuilder()
-               labDevsText << "<ul>"
-               addedLabsDevs.each {
-                  labDevsText << "<li><a href=\"/device/edit/${it.value.hubitatId}\" target=\"_blank\">${it.value.hubitatName}</a>"
-                  labDevsText << " <span style=\"font-style: italic\">(${it.value.hueName ?: 'not found on Hue'})</span></li>"
-                  //input(name: "btnRemove_LabsDev_ID", type: "button", title: "Remove", width: 3)
-               }
-               labDevsText << "</ul>"
-               paragraph(labDevsText.toString())
-            }
-            else {
-               paragraph "<span style=\"font-style: italic\">No added Hue Labs Forumla devices found</span>"
-            }
-            if (unclaimedLabsDevs) {                  
-               paragraph "Hubitat devices not found on Hue:"
-               StringBuilder labDevsText = new StringBuilder()
-               labDevsText << "<ul>"
-               unclaimedLabsDevs.each {                  
-                  labDevsText << "<li><a href=\"/device/edit/${it.id}\" target=\"_blank\">${it.displayName}</a></li>"
-               }
-               labDevsText << "</ul>"
-               paragraph(labDevsText.toString())
-            }
-         }
-         section("Rediscover Labs Devices") {
-               paragraph("If you added new Labs formulas to the Hue Bridge and do not see them above, click/tap the button " +
-                        "below to retrieve new information from the Bridge.")
-               input(name: "btnLabsRefresh", type: "button", title: "Refresh Labs Formula List", submitOnChange: true)
          }
       }
    }

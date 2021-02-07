@@ -20,9 +20,12 @@
  *  v0.9    - (Beta) Initial Public Release
  */ 
 
-import groovy.json.JsonBuilder
+import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.transform.Field
+
+// 
+@Field static Map<Long,Long> id = [:]
 
 // Criteria for device filtering from HASS for different Hubitat device types, generally based on
 // HASS domain or device_class borderline-heuristics (may need adjusment for some specific devices)
@@ -52,7 +55,6 @@ import groovy.transform.Field
 @Field static Map<Long,Map<String,String>> switchCache = [:]
 @Field static Map<Long,Map<String,String>> motionCache = [:]
 @Field static Map<Long,Map<String,String>> contactCache = [:]
-
 
 metadata {
    definition (name: "HASSConnect Home Assistant Hub", namespace: "RMoRobert", author: "Robert Morris",
@@ -102,6 +104,7 @@ void initialize() {
 
 void connectWebSocket() {
    if (enableDebug) log.debug "connectWebSocket()"
+   id[device.id] = 1
    interfaces.webSocket.connect("ws://${ipAddress}:${port}/api/websocket")
 }
 
@@ -115,7 +118,7 @@ private void webSocketStatus(String msg) {
       if (state.connectionRetryTime) {
          state.connectionRetryTime *= 2
          if (state.connectionRetryTime > 3600) {
-            state.connectionRetryTime = 3600 // cap retries at 1 hour
+            state.connectionRetryTime = 3600 // cap retry time at 1 hour
          }
       }
       else {
@@ -131,6 +134,7 @@ void parse(String description) {
    if (enableDebug) log.debug "parse(): $description"
    Map parsedMap = new JsonSlurper().parseText(description)
    if (parsedMap) {
+      // ***** For responding to auth requests: *****
       if (parsedMap["type"] == "auth_required") {
          if (enableDebug) log.debug "type = auth_required; sending authorization..."
          sendCommand([type: "auth", access_token: accessToken])
@@ -139,26 +143,26 @@ void parse(String description) {
          if (enableDebug) log.debug "type = auth_ok; requesting subscriptions..."
          // Subscribe to events--not filtering now, but commented out seconds below may cover
          // all that's needed if becomes necessary:
-         sendCommand([id: device.id, type: "subscribe_events"/*, event_type: "state_changed"*/])
-         //sendCommand([id: device.id, type: "subscribe_events", event_type: "zha_event"])
+         sendCommand([id: id[device.id] ?: 1, type: "subscribe_events"/*, event_type: "state_changed"*/])
+         //sendCommand([id: id[device.id] ?: 1, type: "subscribe_events", event_type: "zha_event"])
       }
-      else if (parsedMap["id"] as String == "${device.id}") {
-         if (enableDebug) log.debug "ID matches subscription; parsing..."
-         if (parsedMap["type"] == "event") {
-            if (parsedMap.event?.data?.entity_id) {
-               parseDeviceState(parsedMap.event)
-            }
-            else {
-               log.error "Skipping...<br> groovy.json.JsonOutput.prettyPrint(description)"
-            }
+      // ***** Regular events: *****
+      if (parsedMap["type"] == "event" || parsedMap["event_type"] == "state_changed" ) {
+         if (parsedMap.event?.data?.entity_id) {
+            if (enableDebug) "parsing as event..."
+            parseDeviceState(parsedMap.event)
+         }
+         else if  (parsedMap.data?.entity_id) {
+            if (enableDebug) log.debug "parsing as state change..."
+            parseDeviceState(parsedMap)
          }
          else {
-            if (enableDebug) log.debug "Skipping because not type=event"
+            log.trace "Skipping...<br> ${JsonOutput.prettyPrint(description)}"
          }
       }
       else {
-         if (enableDebug) log.debug "Skipping because ID does not match"
-      }
+         if (enableDebug) log.debug "Skipping because not type=event"
+      }      
    }
    else {
       if (enableDebug) log.debug "Not parsing; map empty"
@@ -167,23 +171,25 @@ void parse(String description) {
 
 void parseDeviceState(Map event) {
    log.debug "parseDeviceState($event)"
+   //log.trace JsonOutput.prettyPrint(JsonOutput.toJson(event))
    List<Map> evts = []
    com.hubitat.app.ChildDeviceWrapper dev
    // Set "deviceType" to device_class for sensors, binary sensors, etc; otherwise, use entity's domain
    // to classify (e.g., light.hallway1 is "light"), then generate events as needed based on parsing HASS
    // event data if matching device is present on Hubitat
-   String deviceType = event.data.new_state.attributes.device_class ?:
-                       event.data.entity_id.substring(0, parsedMap.event.data.entity_id.indexOf("."))
+   String deviceType = event.data.new_state.attributes.device_class
+   String entityId =  event.data.entity_id ?: event.data.service_data?.entity_id
+   if (!deviceType) deviceType = entityId.tokenize(".")[0]
    switch (deviceType) {
       case "switch":
-         String dni = "${device.deviceNetworkId}/Switch/${event.data.entity_id}"
+         String dni = "${device.deviceNetworkId}/switch/${entityId}"
          dev = getChildDevice(dni); if (dev == null) break
          String value = (event.data.new_state.state == "on") ? "on" : "off"
          evts << [name: "switch", value: value,
                   descriptionText: "${dev?.displayName} switch is $value"]
          break
       case {it in motionSensorDeviceClasses}:
-         String dni = "${device.deviceNetworkId}/Motion/${event.data.entity_id}"
+         String dni = "${device.deviceNetworkId}/motion/${entityId}"
          dev = getChildDevice(dni); if (dev == null) break
          String value = (event.data.new_state.state == "on") ? "active" : "inactive"
          evts << [name: "motion", value: value,
@@ -196,15 +202,17 @@ void parseDeviceState(Map event) {
    dev?.parse(evts)
 }
 
-void sendCommand(Map command, String callback="parseStates") {
+void sendCommand(Map command) {
    if (enableDebug) log.debug "sendCommand($command)"
-   String msg = new JsonBuilder(command).toString()
-   //if (enableDebug) log.debug "sending JSON: $msg"
+   id[device.id] = id[device.id] ? id[device.id] + 1 : 2
+   if (!(command.id) && !(command.type == "auth")) command += [id: id[device.id]]
+   String msg = JsonOutput.toJson(command)
+   if (enableDebug) log.debug "sendCommand JSON: $msg"
    interfaces.webSocket.sendMessage(msg)
 }
 
 void refresh() {
-   logDebug("Refresh...")
+   if (enableDebug) log.debug "refresh()"
    //log.trace this."$motionSensorDeviceClasses"
    Map params = [
       uri: "http://${ipAddress}:${port}/api/states",
@@ -224,11 +232,8 @@ void refresh() {
  * methods below.
  */
 private void parseStates(resp, data) {
-   resp.json.each { 
-      log.trace it
-
-   }
-   logDebug("parseStates: States from Bridge received. Now parsing...")
+   //resp.json.each { log.trace it }
+   if (enableDebug) log.debug "parseStates: States from Bridge received. Now parsing..."
    if (checkIfValidResponse(resp)) {
       parseLightStates(resp.json.lights)
       parseGroupStates(resp.json.groups)
@@ -236,6 +241,25 @@ private void parseStates(resp, data) {
       parseLabsSensorStates(resp.json.sensors)
    }
 }
+
+/**
+ * Callback method that handles full Bridge refresh. Eventually delegated to individual
+ * methods below.
+ */
+private void handleGenericResponse(resp, data) {
+   resp.json.each { 
+      log.trace it
+
+   }
+   if (enableDebug) log.debug "parseStates: States from Bridge received. Now parsing..."
+   if (checkIfValidResponse(resp)) {
+      parseLightStates(resp.json.lights)
+      parseGroupStates(resp.json.groups)
+      parseSensorStates(resp.json.sensors)
+      parseLabsSensorStates(resp.json.sensors)
+   }
+}
+
 
 
 // ----------- Device-fetching methods -------------
@@ -274,7 +298,6 @@ private void parseFetchDevicesResponse(resp, Map data) {
          }
          if (enableDebug) log.debug "Finished finding devices; devices = $devices"
          this."${data.deviceClass}Cache"[device.id] = devices
-         log.error this."${data.deviceClass}Cache"[device.id]
       }
       else {
          log.warn "No JSON found in response in parseFetchDevicesResponse(). HTTP ${resp.status}"
@@ -307,9 +330,9 @@ void clearCache(String deviceSelector) {
 }
 
 private void doSendEvent(String eventName, eventValue) {
-   //logDebug("Creating event for $eventName...")
+   //if (enableDebug) log.debug ("Creating event for $eventName...")
    String descriptionText = "${device.displayName} ${eventName} is ${eventValue}"
-   logDesc(descriptionText)
+   if (settings.enableDesc) log.info descriptionText
    sendEvent(name: eventName, value: eventValue, descriptionText: descriptionText)
 }
 
@@ -321,10 +344,28 @@ Map<String,Map<String,Object>> getDeviceSelectors() {
    return deviceSelectors
 }
 
-void logDebug(str) {
-   if (settings.enableDebug) log.debug(str)
+Map<String,String> get
+
+///////////////////////////////////////
+// Component device methods:
+///////////////////////////////////////
+
+void componentOn(com.hubitat.app.DeviceWrapper dev) {
+   if (enableDebug) log.debug "componentOn(${dev.displayName})"
+   // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
+   String entityId = dev.deviceNetworkId.tokenize("/")[3]
+   String domain = entityId.tokenize(".")[0]
+   Map cmd = [type: "call_service", service: "turn_on", domain: domain, service_data: [entity_id: entityId]]
+   log.warn "cmd = $cmd"
+   sendCommand(cmd)
 }
 
-void logDesc(str) {
-   if (settings.enableDesc) log.info(str)
+void componentOff(com.hubitat.app.DeviceWrapper dev) {
+   if (enableDebug) log.debug "componentOff(${dev.displayName})"
+   // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
+   String entityId = dev.deviceNetworkId.tokenize("/")[3]
+   String domain = entityId.tokenize(".")[0]
+   Map cmd = [type: "call_service", service: "turn_off", domain: domain, service_data: [entity_id: entityId]]
+   log.warn "cmd = $cmd"
+   sendCommand(cmd)
 }
