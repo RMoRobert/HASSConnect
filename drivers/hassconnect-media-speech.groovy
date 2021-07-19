@@ -18,8 +18,6 @@
  *  Changelog:
  *  v0.9    - (Beta) Initial Public Release -- message/text only, no voice or volume yet supported
  */ 
-
- */ 
  
 metadata {
    definition (name: "HASSConnect Media/Speech Device", namespace: "RMoRobert", author: "Robert Morris", importUrl: "https://raw.githubusercontent.com/RMoRobert/HASSConnect/main/drivers/hassconnect-media-speech.groovy") {
