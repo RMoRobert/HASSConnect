@@ -23,9 +23,10 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2021-02-06
+ *  Last modified: 2021-07-18
  * 
  *  Changelog:
+ *  v0.9.1  - Added preliminary TTS (Chromecast) support
  *  v0.9    - (Beta) Initial Public Release
  */ 
 
@@ -33,6 +34,8 @@ import groovy.transform.Field
 
 @Field static String lastDeviceSelectorKey // cache when using/refreshing device-selection page
 @Field static String lastDeviceSelectorUIName // cache when using/refreshing device-selection page
+
+@Field static final String customDriverNamespace = "RMoRobert"
 
 
 definition (
@@ -102,12 +105,13 @@ def pageFirstPage() {
          if (enableDebug) log.debug "All hub information present"
          if (enableDebug) log.debug "Creating child device..."
          Map devProps = [name: """HASSConnect HASS Hub${nickname ? " - ${nickname} " : ""}"""]
-         hubDev = addChildDevice(childNamespace, "HASSConnect Home Assistant Hub", "Hc/${app.id}", devProps)
+         hubDev = addChildDevice(customDriverNamespace, "HASSConnect Home Assistant Hub", "Hc/${app.id}", devProps)
          if (hubDev != null) {
             if (enableDebug) log.debug "Updating child device data..."
             hubDev.updateSetting("ipAddress", [value: ipAddress, type: "string"])
             hubDev.updateSetting("port", [value: port, type: "number"])
-            hubDev.updateSetting("accessToken", [value: accessToken, type: "number"])
+            hubDev.updateSetting("accessToken", [value: accessToken, type: "string"])
+            hubDev.updateSetting("useSecurity", [value: useSecurity, type: "bool"])
          }
          else {
             log.error "HASSConnect hub device not found and could not be created"
@@ -148,8 +152,9 @@ def pageAddHub() {
             required: true
          input name: "port", type: "number", title: "Port", description: "Default: 8123", defaultValue: 8123,
             required: true
-         input name: "accessToken", type: "string", title: "Access token", required: true
-         paragraph "The \"long-lived access token\" required above can be created in your Home Assistant setup at: http://IP_ADDRESS:PORT/profile"
+         input name: "useSecurity", type: "boolean", title: "Use TLS"
+         input name: "accessToken", type: "string", title: "Long-lived access token", required: true
+         paragraph "The \"long-lived access token\" required above can be created in your Home Assistant setup at: $lt;yourhomeAssistantIP$gt;/profile"
       }
       section("Test connection") {
          href name: "hrefTestConnection", title: "Test connection",
