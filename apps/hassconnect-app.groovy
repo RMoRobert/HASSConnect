@@ -61,12 +61,12 @@ preferences {
 }
 
 void installed() {
-   log.info("Installed with settings: ${settings}")
+   log.trace("Installed with settings: ${settings}")
    initialize()
 }
 
 void uninstalled() {
-   log.info("Uninstalling")
+   log.trace "uninstalled()"
    if (!(settings['deleteDevicesOnUninstall'] == false)) {
       logDebug("Deleting child devices...")
       List DNIs = getChildDevices().collect { it.deviceNetworkId }
@@ -78,12 +78,12 @@ void uninstalled() {
 }
 
 void updated() {
-    log.info("updated()")
+    log.debug "updated()"
     initialize()
 }
 
 void initialize() {
-   log.debug("Initializing...")
+   log.debug "initialize()"
    unschedule()
    Integer disableTime = 1800
    if (enableDebug) {
@@ -93,7 +93,7 @@ void initialize() {
 }
 
 void debugOff() {
-   log.warn("Disabling debug logging")
+   log.warn "Disabling debug logging after timeout"
    app.updateSetting("enableDebug", [value:"false", type:"bool"])
 }
 
@@ -107,11 +107,7 @@ def pageFirstPage() {
          Map devProps = [name: """HASSConnect HASS Hub${nickname ? " - ${nickname} " : ""}"""]
          hubDev = addChildDevice(customDriverNamespace, "HASSConnect Home Assistant Hub", "Hc/${app.id}", devProps)
          if (hubDev != null) {
-            if (enableDebug) log.debug "Updating child device data..."
-            hubDev.updateSetting("ipAddress", [value: ipAddress, type: "string"])
-            hubDev.updateSetting("port", [value: port, type: "number"])
-            hubDev.updateSetting("accessToken", [value: accessToken, type: "string"])
-            hubDev.updateSetting("useSecurity", [value: useSecurity, type: "bool"])
+            updateHubChildSettings()            
          }
          else {
             log.error "HASSConnect hub device not found and could not be created"
@@ -148,13 +144,14 @@ def pageAddHub() {
             paragraph "NOTE: Hub device already detected on Hubitat. Editing the below may fail; try editing the hub device directly if any of the below fails."
          }
          input name: "nickname", type: "text", title: "\"Nickname\" for Home Assistant hub (optional; will be used as part of app and hub device names):"
-         input name: "ipAddress", type: "string", title: "IP address", description: "Example: 192.168.0.10",
+         input name: "ipAddress", type: "string", title: "IP address", description: "Example: 192.168.0.10", submitOnChange: true,
             required: true
-         input name: "port", type: "number", title: "Port", description: "Default: 8123", defaultValue: 8123,
+         input name: "port", type: "number", title: "Port", description: "Default: 8123", defaultValue: 8123, submitOnChange: true,
             required: true
-         input name: "useSecurity", type: "boolean", title: "Use TLS"
-         input name: "accessToken", type: "string", title: "Long-lived access token", required: true
-         paragraph "The \"long-lived access token\" required above can be created in your Home Assistant setup at: $lt;yourhomeAssistantIP$gt;/profile"
+         input name: "useSecurity", type: "bool", title: "Use TLS", submitOnChange: true
+         input name: "accessToken", type: "string", title: "Long-lived access token", submitOnChange: true, required: true
+         paragraph "The \"long-lived access token\" required above can be created in your Home Assistant setup at: <code>${ipAddress ?: '&lt;yourHomeAssistantIP&gt;'}/profile</code>"
+         input name: "btnSaveHub", type: "button", title: "Save Hub Settings"
       }
       section("Test connection") {
          href name: "hrefTestConnection", title: "Test connection",
@@ -167,7 +164,7 @@ def pageAddHub() {
 }
 
 def pageTestConnection() {
-   dynamicPage(name: "pageTestConnection", uninstall: false, install: false, nextPage: "pageFirstPage") {
+   dynamicPage(name: "pageTestConnection", uninstall: false, install: false, nextPage: "pageAddHub") {
       section(styleSection("Test connection")) {\
          if (testConnection()) {
             paragraph "<b>Connection succesful!</b>"
@@ -204,7 +201,7 @@ Boolean testConnection(Integer timeoutInSeconds=10) {
 /**
  * Adds new devices if any were selected on selection pages (called when navigating back to main "manage" page)
  */
-def createNewSelectedDevices() {
+void createNewSelectedDevices() {
    // Add new devices if any were selected
    com.hubitat.app.ChildDeviceWrapper hubDev = getChildDevice("Hc/${app.id}")
    Map<String,Map<String,Object>> deviceSelectors
@@ -393,10 +390,24 @@ void createNewSelectedSwitchDevices() {
    app.removeSetting("newSwitches")
 }
 
+void updateHubChildSettings() {
+   com.hubitat.app.ChildDeviceWrapper hubDev = getChildDevice("Hc/${app.id}")
+   hubDev.updateSetting("ipAddress", [value: ipAddress, type: "string"])
+   hubDev.updateSetting("port", [value: port, type: "number"])
+   hubDev.updateSetting("accessToken", [value: accessToken, type: "string"])
+   hubDev.updateSetting("useSecurity", [value: useSecurity, type: "bool"])
+   pauseExecution(2500)
+   hubDev.initialize()
+}
+
 void appButtonHandler(String btn) {
    switch(btn) {
-      //case "btnName":
-      //   break
+      case "btnSaveHub":
+         updateHubChildSettings()
+         break
+      case "btnDeviceRefresh":
+         // nothing, just refrehs page
+         break
       default:
          log.warn "Unhandled app button press: $btn"
    }

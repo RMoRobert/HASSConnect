@@ -14,10 +14,10 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2021-07-18
+ *  Last modified: 2021-07-19
  *
  *  Changelog:
- *  v0.9.1  - (Beta) Added media_player entities (preliminary Chromecast support)
+ *  v0.9.1  - (Beta) Added media_player entities (preliminary Chromecast support); improved reconnection algorithm
  *  v0.9    - (Beta) Initial Public Release
  */ 
 
@@ -79,8 +79,8 @@ metadata {
       input name: "port", type: "number", title: "Port", required: true
       input name: "accessToken", type: "string", title: "Long-lived access token", required: true
       input name: "useSecurity", type: "bool", title: "Use TLS"
-      input name: "enableDebug", type: "bool", title: "Enable debug logging", defaultValue: true
-      input name: "enableDesc", type: "bool", title: "Enable descriptionText logging", defaultValue: true
+      input name: "enableDebug", type: "bool", title: "Enable debug logging"
+      input name: "enableDesc", type: "bool", title: "Enable descriptionText logging"
    }   
 }
 
@@ -91,7 +91,7 @@ void debugOff() {
 
 void installed() {
    log.debug "installed()"
-   initialize()
+   runIn(4, "initialize")
 }
 
 void updated() {
@@ -120,15 +120,23 @@ void connectWebSocket() {
    }
 }
 
+void reconnectWebSocket(Boolean notIfAlreadyConnected = true) {
+   if (enableDebug) log.debug "reconnectWebSocket()"
+   if (device.currentValue("status") == "open") {
+      if (enableDebug) log.debug "already connected; skipping reconnection"
+   }
+   else {
+      connectWebSocket()
+   }
+}
+
 void webSocketStatus(String msg) {
    if (enableDebug) log.debug "webSocketStatus: $msg"
    if (msg?.startsWith("status: ")) msg = msg.substring(8) // remove "status: " from string
    doSendEvent("status", msg)
    if (msg.contains("open")) {
       // 'closing' and 'open' seem to happen such quick succession that some extra time might be needed not to overlap previous execution:
-      pauseExecution(700)
       state.connectionRetryTime = 5
-      unschedule("connectWebSocket")
    }
    else {
       if (state.connectionRetryTime) {
@@ -140,7 +148,7 @@ void webSocketStatus(String msg) {
       else {
          state.connectionRetryTime = 5
       }
-      runIn(state.connectionRetryTime, "connectWebSocket")
+      runIn(state.connectionRetryTime, "reconnectWebSocket")
    }
 }
 
@@ -241,7 +249,7 @@ void refresh() {
    if (enableDebug) log.debug "refresh()"
    //log.trace this."$motionSensorDeviceClasses"
    Map params = [
-      uri: "http://${ipAddress}:${port}/api/states",
+      uri: useSecurity ? "https://${ipAddress}:${port}/api/states" : "http://${ipAddress}:${port}/api/states",
       contentType: "application/json",
       headers: [Authorization: "Bearer ${accessToken}"],
       timeout: 15
