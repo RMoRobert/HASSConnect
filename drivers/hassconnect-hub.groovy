@@ -14,9 +14,10 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2021-07-19
+ *  Last modified: 2021-08-08
  *
  *  Changelog:
+ *  v0.9.2  - (Beta) Added RGBW light support, improved reconnection and concurrency issues
  *  v0.9.1  - (Beta) Added media_player entities (preliminary Chromecast support); improved reconnection algorithm
  *  v0.9    - (Beta) Initial Public Release
  */ 
@@ -24,8 +25,9 @@
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.transform.Field
+import java.util.concurrent.ConcurrentHashMap
 
-@Field static Map<Long,Long> id = [:]
+@Field static ConcurrentHashMap<Long,Long> id = [:]
 @Field static final Boolean boolIgnoreSSLIssues = true
 
 // Criteria for device filtering from HASS for different Hubitat device types, generally based on
@@ -34,6 +36,11 @@ import groovy.transform.Field
    "switch": [uiName: "switches",
               driver: "Generic Component Switch", driverNamespace: "hubitat",
               detectionClosure: {Map m -> m.entity_id?.startsWith("switch.")}],
+   lightRGBW: [uiName: "lights (RGBW)",
+              driver: "Generic Component RGBW", driverNamespace: "hubitat",
+              detectionClosure: {Map m -> m.entity_id?.startsWith("light.") &&
+                                           m.attributes?.supported_color_modes?.contains("hs") &&
+                                          m.attributes?.supported_color_modes?.contains("color_temp")}],
    motion:   [uiName: "motion sensors",
               driver: "Generic Component Motion Sensor", driverNamespace: "hubitat",
               detectionClosure: {Map m -> m.attributes?.device_class in deviceClasses["motion"]}],
@@ -48,8 +55,8 @@ import groovy.transform.Field
 // Sensor and binary sensor HASS device_class to Hubitat capability mappings (where needed)
 // Required only for devices where deviceSelectors map (above) or state parsing (way below) use these
 @Field static final Map<String,List<String>> deviceClasses = [
-   "motion": ["motion", "presence", "occupancy"],
-   "contact": ["door", "garage_door", "window"]
+   motion: ["motion", "presence", "occupancy"],
+   contact: ["door", "garage_door", "window"]
 ]
 
 // Device caches (could use state, but this is likely a less expensive alternative for temporary storage)
@@ -57,6 +64,7 @@ import groovy.transform.Field
 // Once accessed by device ID, cache is in Map with [hass_entity_id: hass_friendly_name] format
 // Required for all deviceSelectors keys (so add new entry here if add one to deviceSelectors above)
 @Field static Map<Long,Map<String,String>> switchCache = [:]
+@Field static Map<Long,Map<String,String>> lightRGBWCache = [:]
 @Field static Map<Long,Map<String,String>> motionCache = [:]
 @Field static Map<Long,Map<String,String>> contactCache = [:]
 @Field static Map<Long,Map<String,String>> mediaPlayerCache = [:]
@@ -122,7 +130,7 @@ void connectWebSocket() {
 
 void reconnectWebSocket(Boolean notIfAlreadyConnected = true) {
    if (enableDebug) log.debug "reconnectWebSocket()"
-   if (device.currentValue("status") == "open") {
+   if (device.currentValue("status") == "open" && notIfAlreadyConnected) {
       if (enableDebug) log.debug "already connected; skipping reconnection"
    }
    else {
@@ -165,12 +173,12 @@ void parse(String description) {
       }
       else if (parsedMap["type"] == "auth_ok") {
          if (enableDebug) log.debug "type = auth_ok; requesting subscriptions..."
-         // Subscribe to events--not filtering now, but commented out seconds below may cover
+         // Subscribe to events--not filtering now, but commented out sections below may cover
          // all that's needed if becomes necessary:
          sendCommand([id: id[device.id] ?: 2, type: "subscribe_events"/*, event_type: "state_changed"*/])
          //sendCommand([id: id[device.id] ?: 2, type: "subscribe_events", event_type: "zha_event"])
       }
-      //log.error "id = ${parsedMap['id']}"
+      //log.trace "id = ${parsedMap['id']}"
       // ***** Regular events: *****
       if (parsedMap["type"] == "event" || parsedMap["event_type"] == "state_changed" ) {
          if (parsedMap.event?.data?.entity_id) {
@@ -180,6 +188,11 @@ void parse(String description) {
          else if  (parsedMap.data?.entity_id) {
             if (enableDebug) log.debug "parsing as state change..."
             parseDeviceState(parsedMap)
+         }
+         // parse(): {"id": 2, "type": "result", "success": false, "error": {"code": "id_reuse", "message": "Identifier values have to increase."}}
+         else if (parsedMap["type"] == "result" && parsedMap["success"] == false && parsedMap.error?.code == "id_reuse") {
+            // should also reset ID
+            connectWebSocket()
          }
          else {
             log.trace "Skipping...<br> ${JsonOutput.prettyPrint(description)}"
@@ -213,7 +226,58 @@ void parseDeviceState(Map event) {
          evts << [name: "switch", value: value,
                   descriptionText: "${dev?.displayName} switch is $value"]
          break
-      case {it in motionSensorDeviceClasses}:
+      case "light":
+         String dni = "${device.deviceNetworkId}/lightRGBW/${entityId}"
+         dev = getChildDevice(dni)
+         // Backup ... may need to add mroe of these in case if/when add more devices
+         if (dev == null) {
+            dni = "${device.deviceNetworkId}/light/${entityId}"
+            dev = getChildDevice(dni)
+         }
+         if (dev == null) {
+            break
+         }
+         log.warn "${JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(event.data.new_state))}"
+         if (event.data.new_state.state) {
+            String value = (event.data.new_state.state == "on") ? "on" : "off"
+            evts << [name: "switch", value: value,
+                  descriptionText: "${dev?.displayName} switch is $value"]
+         }
+         if (event.data.new_state.attributes.color_mode == "hs") {
+            evts << [name: "colorMode", value: "RGB",
+                  descriptionText: "${dev?.displayName} colorMode is RGB"]
+            if (event.data.new_state.attributes.hs_color) {
+               Integer value =  Math.round(event.data.new_state.attributes.hs_color[0]/3.6)
+               evts << [name: "hue", value: value,
+                     descriptionText: "${dev?.displayName} hue is $value"]
+               value = event.data.new_state.attributes.hs_color[1]
+               evts << [name: "saturation", value: value,
+                     descriptionText: "${dev?.displayName} saturation is $value"]
+            }
+            else if (event.data.new_state.attributes.rgb_color) {
+               if (enableDebug) log.warn "ignoring rgb color (todo)"
+            }
+            else if (event.data.new_state.attributes.xy) {
+               if (enableDebug) log.warn "ignoring xy color (todo)"
+            }
+         }
+         if (event.data.new_state.attributes.color_mode == "color_temp") {
+            evts << [name: "colorMode", value: "CT",
+                  descriptionText: "${dev?.displayName} colorMode is CT"]
+            if (event.data.new_state.attributes.color_temp) {
+               Integer value =  Math.round(1000000/event.data.new_state.attributes.color_temp)
+               evts << [name: "colorTemperature", value: value,
+                     descriptionText: "${dev?.displayName} colorTemperature is $value"]
+            }
+         }
+         if (event.data.new_state.attributes.brightness != null) {
+            Integer value = Math.round(event.data.new_state.attributes.brightness/2.55)
+            evts << [name: "level", value: value,
+                  descriptionText: "${dev?.displayName} level is $value"]
+         }
+         log.trace "LIGHT evts = $evts"
+         break
+      case {it in deviceClasses.motion}:
          String dni = "${device.deviceNetworkId}/motion/${entityId}"
          dev = getChildDevice(dni); if (dev == null) break
          String value = (event.data.new_state.state == "on") ? "active" : "inactive"
@@ -223,10 +287,14 @@ void parseDeviceState(Map event) {
       case "media_player":
          String dni = "${device.deviceNetworkId}/mediaPlayer/${entityId}"
          dev = getChildDevice(dni); if (dev == null) break
-         String value = (event.data.new_state.state == "on") ? "active" : "inactive"
-         evts << [name: "motion", value: value,
-                  descriptionText: "${dev?.displayName} motion is $value"]
-         break
+         String
+         log.warn event.data
+         if (event.data.new_state.state in ["on", "idle"]) value = "on"
+         else if (event.data.new_state.state == "off") value = "off"
+         if (value) {
+         evts << [name: "switch", value: value,
+                  descriptionText: "${dev?.displayName} switch is $value"]
+         }
          break
       default:
          if (enableDebug) log.debug "skipping class $deviceType"
@@ -237,7 +305,7 @@ void parseDeviceState(Map event) {
 
 void sendCommand(Map command) {
    if (enableDebug) log.debug "sendCommand($command)"
-   log.trace "id = ${id[device.id]}"
+   //log.trace "id = ${id[device.id]}"
    id[device.id] = id[device.id] ? id[device.id] + 1 : 2
    if (!(command.id) && !(command.type == "auth")) command += [id: id[device.id]]
    String msg = JsonOutput.toJson(command)
@@ -247,7 +315,6 @@ void sendCommand(Map command) {
 
 void refresh() {
    if (enableDebug) log.debug "refresh()"
-   //log.trace this."$motionSensorDeviceClasses"
    Map params = [
       uri: useSecurity ? "https://${ipAddress}:${port}/api/states" : "http://${ipAddress}:${port}/api/states",
       contentType: "application/json",
@@ -260,40 +327,6 @@ void refresh() {
       log.error "Error in refresh: $ex"
    }
 }
-
-/**
- * Callback method that handles full Bridge refresh. Eventually delegated to individual
- * methods below.
- */
-private void parseStates(resp, data) {
-   //resp.json.each { log.trace it }
-   if (enableDebug) log.debug "parseStates: States from Bridge received. Now parsing..."
-   if (checkIfValidResponse(resp)) {
-      parseLightStates(resp.json.lights)
-      parseGroupStates(resp.json.groups)
-      parseSensorStates(resp.json.sensors)
-      parseLabsSensorStates(resp.json.sensors)
-   }
-}
-
-/**
- * Callback method that handles full Bridge refresh. Eventually delegated to individual
- * methods below.
- */
-private void handleGenericResponse(resp, data) {
-   resp.json.each { 
-      log.trace it
-
-   }
-   if (enableDebug) log.debug "parseStates: States from Bridge received. Now parsing..."
-   if (checkIfValidResponse(resp)) {
-      parseLightStates(resp.json.lights)
-      parseGroupStates(resp.json.groups)
-      parseSensorStates(resp.json.sensors)
-      parseLabsSensorStates(resp.json.sensors)
-   }
-}
-
 
 
 // ----------- Device-fetching methods -------------
@@ -345,6 +378,7 @@ private void parseFetchDevicesResponse(resp, Map data) {
          Map<String,String> devices = [:]
          resp.json.findAll(deviceSelectors[data.deviceClass].detectionClosure)?.each {
                if (enableDebug) log.debug "Critera matched for entity ${it.entity_id}"
+               else { log.warn it }
                devices[it.entity_id] = it.attributes?.friendly_name ?: it.entity_id
          }
          if (enableDebug) log.debug "Finished finding devices; devices = $devices"
@@ -405,7 +439,6 @@ void componentOn(com.hubitat.app.DeviceWrapper dev) {
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
    Map cmd = [type: "call_service", service: "turn_on", domain: domain, service_data: [entity_id: entityId]]
-   log.warn "cmd = $cmd"
    sendCommand(cmd)
 }
 
@@ -415,7 +448,87 @@ void componentOff(com.hubitat.app.DeviceWrapper dev) {
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
    Map cmd = [type: "call_service", service: "turn_off", domain: domain, service_data: [entity_id: entityId]]
-   log.warn "cmd = $cmd"
+   sendCommand(cmd)
+}
+
+void componentRefresh(com.hubitat.app.DeviceWrapper dev) {
+   if (enableDebug) log.debug "componentRefresh(${dev.displayName})"
+   log.trace "not implemented: componentRefresh for ${dev.displayName}"
+}
+
+void componentSetLevel(com.hubitat.app.DeviceWrapper dev, Number level, Number transitionTime=null) {
+   if (enableDebug) log.debug "componentSetLevel(${dev.displayName}, $level)"
+   // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
+   String entityId = dev.deviceNetworkId.tokenize("/")[3]
+   String domain = entityId.tokenize(".")[0]
+   Map svcData = [entity_id: entityId, brightness_pct: level as Integer]
+   if (transitionTime != null) svcData << [transition: transitionTime]
+   Map cmd = [type: "call_service", service: "turn_on", domain: domain, service_data: svcData]
+   sendCommand(cmd)
+}
+
+void componentStartLevelChange(com.hubitat.app.DeviceWrapper dev, String direction) {
+   if (enableDebug) log.debug "componentStartLevelChange(${dev.displayName}, $direction)"
+   // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
+   String entityId = dev.deviceNetworkId.tokenize("/")[3]
+   String domain = entityId.tokenize(".")[0]
+   Map svcData = [entity_id: entityId, transition: 4, brightness_step: (direction == "up") ? 255 : -255]
+   Map cmd = [type: "call_service", service: "turn_on", domain: domain, service_data: svcData]
+   sendCommand(cmd)
+}
+
+void componentStopLevelChange(com.hubitat.app.DeviceWrapper dev) {
+   if (enableDebug) log.debug "componentStopLevelChange(${dev.displayName})"
+   // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
+   String entityId = dev.deviceNetworkId.tokenize("/")[3]
+   String domain = entityId.tokenize(".")[0]
+   // TODO: This doesn't work well on most (all?) bulbs, but HASS doesn't appear to have a standard way to really do this...
+   Map svcData = [entity_id: entityId, brightness_step: 0]
+   Map cmd = [type: "call_service", service: "turn_on", domain: domain, service_data: svcData]
+   sendCommand(cmd)
+}
+
+void componentSetColorTemperature(com.hubitat.app.DeviceWrapper dev, Number colorTemperature, Number level=null, Number transitionTime=null) {
+   if (enableDebug) log.debug "componentSetColorTemperature(${dev.displayName}, $colorTemperature, $level, $transitionTime)"
+   // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
+   String entityId = dev.deviceNetworkId.tokenize("/")[3]
+   String domain = entityId.tokenize(".")[0]
+   Map svcData = [entity_id: entityId, kelvin: colorTemperature as Integer]
+   if (level != null) svcData << [brightness_pct: level as Integer]
+   if (transitionTime != null) svcData << [transition: transitionTime]
+   Map cmd = [type: "call_service", service: "turn_on", domain: domain, service_data: svcData]
+   sendCommand(cmd)
+}
+
+void componentSetColor(com.hubitat.app.DeviceWrapper dev, Map colorMap) {
+   if (enableDebug) log.debug "componentSetColor(${dev.displayName}, $colorMap)"
+   // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
+   String entityId = dev.deviceNetworkId.tokenize("/")[3]
+   String domain = entityId.tokenize(".")[0]
+   Map svcData = [entity_id: entityId, hs_color: [Math.round(colorMap.hue * 3.6) as Integer, colorMap.saturation]]
+   if (colorMap.level != null) svcData << [brightness: colorMap.level]
+   if (colorMap.rate != null) svcData << [transition: colorMap.rate]
+   Map cmd = [type: "call_service", service: "turn_on", domain: domain, service_data: svcData]
+   sendCommand(cmd)
+}
+
+void componentSetHue(com.hubitat.app.DeviceWrapper dev, Number hue) {
+   if (enableDebug) log.debug "componentSetHue(${dev.displayName}, $hue)"
+   // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
+   String entityId = dev.deviceNetworkId.tokenize("/")[3]
+   String domain = entityId.tokenize(".")[0]
+   Map svcData = [entity_id: entityId, hs_color: [Math.round(hue*3.6), dev.currentValue('saturation')]]
+   Map cmd = [type: "call_service", service: "turn_on", domain: domain, service_data: svcData]
+   sendCommand(cmd)
+}
+
+void componentSetSaturation(com.hubitat.app.DeviceWrapper dev, Number sat) {
+   if (enableDebug) log.debug "componentSetSaturation(${dev.displayName}, $sat)"
+   // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
+   String entityId = dev.deviceNetworkId.tokenize("/")[3]
+   String domain = entityId.tokenize(".")[0]
+   Map svcData = [entity_id: entityId, hs_color: [dev.currentValue('hue')*3.6, sat]]
+   Map cmd = [type: "call_service", service: "turn_on", domain: domain, service_data: svcData]
    sendCommand(cmd)
 }
 
@@ -424,6 +537,5 @@ void componentSpeak(com.hubitat.app.DeviceWrapper dev, String text, Number volum
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    Map cmd = [type: "call_service", service: service ?: "google_translate_say", domain: "tts", service_data: [entity_id: entityId, message: text]]
-   log.warn "cmd = $cmd"
    sendCommand(cmd)
 }

@@ -22,6 +22,7 @@
 metadata {
    definition (name: "HASSConnect Media/Speech Device", namespace: "RMoRobert", author: "Robert Morris", importUrl: "https://raw.githubusercontent.com/RMoRobert/HASSConnect/main/drivers/hassconnect-media-speech.groovy") {
       capability "Actuator"
+      capability "Switch"
       capability "SpeechSynthesis"
       capability "Refresh"  // can comment out if don't need
    }
@@ -84,9 +85,22 @@ void parse(String description) {
 
 void parse(List<Map> description) {
    if (enableDebug) log.debug "parse(List description: $description)"
-    description.each {
-        log.trace "ignoring: $it"
-    }
+   description.each {
+       if (it.name == "switch") {
+            doSendEvent(it)
+       }
+       else {
+            log.trace "ignoring: $it"
+      }
+   }
+}
+
+void on() {
+   parent.componentOn(this.device)
+}
+
+void off() {
+   parent.componentOff(this.device)
 }
 
 void refresh() {

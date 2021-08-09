@@ -284,7 +284,7 @@ def pageSelectDevices(params) {
    com.hubitat.app.ChildDeviceWrapper hubDev = getChildDevice("Hc/${app.id}")
    hubDev.fetchDevices(params.selectorKey)
    List arrNewDevs = []
-   Map devCache = hubDev.getCache(params.selectorKey)   
+   Map devCache = hubDev.getCache(params.selectorKey)
    List<com.hubitat.app.ChildDeviceWrapper> unclaimedDevs = hubDev.getChildDevices().findAll { it.deviceNetworkId.startsWith("Hc/${app.id}/${params.selectorKey}/") }
    dynamicPage(name: "pageSelectDevices", refreshInterval: devCache ? 0 :5, uninstall: true, install: false, nextPage: "pageManageHub") {
       Map addedDevs = [:]  // To be populated with devices user has added, matched by HASS entity ID
