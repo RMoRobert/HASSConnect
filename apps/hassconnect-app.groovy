@@ -23,9 +23,10 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2021-07-18
+ *  Last modified: 2021-08-22
  * 
  *  Changelog:
+ *  v0.9.2  - Added preliminary button device/event support
  *  v0.9.1  - Added preliminary TTS (Chromecast) support
  *  v0.9    - (Beta) Initial Public Release
  */ 
@@ -58,6 +59,8 @@ preferences {
    page name: "pageTestConnection"
    page name: "pageManageHub"
    page name: "pageSelectDevices"
+   page name: "pageManageButtons"
+   page name: "pageAddButton"
 }
 
 void installed() {
@@ -259,9 +262,15 @@ def pageManageHub() {
                page: "pageSelectDevices",
                title: "Select ${it.value.uiName}",
                description: "",
-               params: [selectorKey: it.key, selectorUIName: it.value.uiName]
-              )
+               params: [selectorKey: it.key, selectorUIName: it.value.uiName, selectorNotes: it.value.uiNotes]
+            )
          }
+         href(name: "hrefPageManageButtons",
+            page: "pageManageButtons",
+            title: "Manage button devices",
+            description: ""
+         )
+
       }
       section("Other Options") {
          href name: "hrefReAddHub", title: "Edit hub IP, port, or access token",
@@ -276,8 +285,9 @@ def pageSelectDevices(params) {
    if (params) {
       lastDeviceSelectorKey = params.selectorKey
       lastDeviceSelectorUIName = params.selectorUIName
+      lastDeviceSelectorNotes = params.selectorNotes
    } else {
-      params = [selectorKey: lastDeviceSelectorKey, selectorUIName: lastDeviceSelectorUIName]
+      params = [selectorKey: lastDeviceSelectorKey, selectorUIName: lastDeviceSelectorUIName, selectorNotes: lastDeviceSelectorNotes]
    }
    String selctorKey = params.selectorKey
    String uiName;
@@ -323,6 +333,7 @@ def pageSelectDevices(params) {
          section("Manage ${params.selectorUIName}") {
             input(name: "new${params.selectorKey}Devices", type: "enum", title: "Select ${params.selectorUIName} to add:",
                   multiple: true, options: arrNewDevs)
+            if (params.selectorNotes) paragraph(params.selectorNotes)
             paragraph ""
             paragraph("Previously added ${params.selectorUIName}${addedDevs ? ' <span style=\"font-style: italic\">(Home Assistant name in parentheses)</span>' : ''}:")
             if (addedDevs) {
@@ -355,6 +366,58 @@ def pageSelectDevices(params) {
                         "below to retrieve new information from Home Assistant.")
                input(name: "btnDeviceRefresh", type: "button", title: "Refresh Device List", submitOnChange: true)
          }
+      }
+   }
+}
+
+def pageManageButtons() {
+   com.hubitat.app.ChildDeviceWrapper hubDev = getChildDevice("Hc/${app.id}")
+   if (settings.buttonDeviceIEEE) {
+      if (settings.buttonDeviceIEEE) {
+         if (enableDebug) log.debug "Adding button device: IEEE = ${settings.buttonDeviceIEEE}, numberOfButtons = ${settings.buttonDeviceNumberOfButtons}"
+         try {
+            String devDNI = "Hc/${app.id}/zha_button/${buttonDeviceIEEE}"
+            Map devProps = [name: (settings.buttonDeviceName ?: "HASSConnect Button")]
+            hubDev.addChildDevice("RMoRobert", "HASSConnect ZHA Button", devDNI, devProps)
+         }
+         catch (Exception ex) {
+            log.error("Unable to create new button device: $ex")
+         }
+      }
+      app.removeSetting "buttonDeviceName"
+      app.removeSetting "buttonDeviceIEEE"
+   }
+   dynamicPage(name: "pageManageButtons", nextPage: "pageManageHub") {
+      section(styleSection("Manage Button Devices")) {
+         href name: "hrefAddButton", title: "Add button",
+               description: "", page: "pageAddButton"
+      }
+      section(styleSection("Previously Added Button Devices")) {
+         List<com.hubitat.app.ChildDeviceWrapper> buttonDevs = hubDev.getChildDevices().findAll { it.deviceNetworkId.startsWith("Hc/${app.id}/zha_button/") }
+         if (buttonDevs) {
+            StringBuilder sbButtonDevs = new StringBuilder()
+            sbButtonDevs << "<ul>"
+            buttonDevs.each {
+               sbButtonDevs << "<li><a href=\"/device/edit/${it.id}\" target=\"_blank\">${it.displayName}</a></li>"
+            }
+            sbButtonDevs << "</ul>"
+            paragraph(sbButtonDevs.toString())
+         }
+         else {
+            paragraph "None found"
+         }
+      }
+   }
+}
+
+def pageAddButton() {
+   dynamicPage(name: "pageAddButton", nextPage: "pageManageButtons") {
+      section(styleSection("Add Button Device")) {
+         paragraph "To find the IEEE ID for your button device, copy/paste it from <b>Configuration > Devices > <i>(device)</i> > Zigbe Information > IEEE</b>, or go to <b>Developer Tools > Events > Listen To Events</b>, type or paste <b>zha_event</b> (or <b>*</b>) into \"Events to subscribe to,\" and click \"Start Listening,\" press a button on the device, and monitor the output."
+         input name: "buttonDeviceName", title: "Device name", description: "Can be anything you want (does not need to match HASS name)", type: "string", required: true
+         input name: "buttonDeviceIEEE", title: "Button device IEEE:", type: "string", required: true
+         paragraph "<b>NOTE: After adding this button device,</b> open the device page and choose a device profile (under Preferences) for this button to ensure proper functionality."
+         paragraph "Press \"Next\" to add."
       }
    }
 }

@@ -14,9 +14,12 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2021-08-08
+ *  HASS REST API Reference: https://developers.home-assistant.io/docs/api/rest/
+ *
+ *  Last modified: 2021-09-25
  *
  *  Changelog:
+ *  v0.9.3  - (Beta) Added ZHA button (event) support
  *  v0.9.2  - (Beta) Added RGBW light support, improved reconnection and concurrency issues
  *  v0.9.1  - (Beta) Added media_player entities (preliminary Chromecast support); improved reconnection algorithm
  *  v0.9    - (Beta) Initial Public Release
@@ -49,7 +52,8 @@ import java.util.concurrent.ConcurrentHashMap
               detectionClosure: {Map m -> m.attributes?.device_class in deviceClasses["contact"]}],
    mediaPlayer:  [uiName: "media players",
               driver: "HASSConnect Media/Speech Device", driverNamespace: "RMoRobert",
-              detectionClosure: {Map m -> m.entity_id?.startsWith("media_player.")}]
+              detectionClosure: {Map m -> m.entity_id?.startsWith("media_player.")},
+              uiNotes:"This has been tested only with Google Chromecast devices. Not all features may work with all devices."]
 ]
 
 // Sensor and binary sensor HASS device_class to Hubitat capability mappings (where needed)
@@ -87,14 +91,14 @@ metadata {
       input name: "port", type: "number", title: "Port", required: true
       input name: "accessToken", type: "string", title: "Long-lived access token", required: true
       input name: "useSecurity", type: "bool", title: "Use TLS"
-      input name: "enableDebug", type: "bool", title: "Enable debug logging"
-      input name: "enableDesc", type: "bool", title: "Enable descriptionText logging"
+      input name: "logEnable", type: "bool", title: "Enable debug logging"
+      input name: "txtEnable", type: "bool", title: "Enable descriptionText logging"
    }   
 }
 
 void debugOff() {
    log.warn "Disabling debug logging"
-   device.updateSetting("enableDebug", [value:"false", type:"bool"])
+   device.updateSetting("logEnable", [value:"false", type:"bool"])
 }
 
 void installed() {
@@ -108,9 +112,9 @@ void updated() {
 }
 
 void initialize() {
-   if (enableDebug) log.debug "initialize()"
+   if (logEnable) log.debug "initialize()"
    connectWebSocket()
-   if (enableDebug) {
+   if (logEnable) {
       Integer disableTime = 1800
       log.debug "Debug logging will be automatically disabled in ${disableTime/60} minutes"
       runIn(disableTime, debugOff)
@@ -118,7 +122,7 @@ void initialize() {
 }
 
 void connectWebSocket() {
-   if (enableDebug) log.debug "connectWebSocket()"
+   if (logEnable) log.debug "connectWebSocket()"
    id[device.id] = 2
    if (settings.useSecurity) {
       interfaces.webSocket.connect("wss://${ipAddress}:${port}/api/websocket", ignoreSSLIssues: boolIgnoreSSLIssues)
@@ -129,9 +133,9 @@ void connectWebSocket() {
 }
 
 void reconnectWebSocket(Boolean notIfAlreadyConnected = true) {
-   if (enableDebug) log.debug "reconnectWebSocket()"
+   if (logEnable) log.debug "reconnectWebSocket()"
    if (device.currentValue("status") == "open" && notIfAlreadyConnected) {
-      if (enableDebug) log.debug "already connected; skipping reconnection"
+      if (logEnable) log.debug "already connected; skipping reconnection"
    }
    else {
       connectWebSocket()
@@ -139,7 +143,7 @@ void reconnectWebSocket(Boolean notIfAlreadyConnected = true) {
 }
 
 void webSocketStatus(String msg) {
-   if (enableDebug) log.debug "webSocketStatus: $msg"
+   if (logEnable) log.debug "webSocketStatus: $msg"
    if (msg?.startsWith("status: ")) msg = msg.substring(8) // remove "status: " from string
    doSendEvent("status", msg)
    if (msg.contains("open")) {
@@ -163,35 +167,33 @@ void webSocketStatus(String msg) {
 /** Handles incoming messages from WebSocket
 */
 void parse(String description) {
-   if (enableDebug) log.debug "parse(): $description"
+   if (logEnable) log.debug "parse(): $description"
    Map parsedMap = new JsonSlurper().parseText(description)
    if (parsedMap) {
-      // ***** For responding to auth requests: *****
+      // Responding to auth reuqeust
       if (parsedMap["type"] == "auth_required") {
-         if (enableDebug) log.debug "type = auth_required; sending authorization..."
-         sendCommand([type: "auth", access_token: accessToken])
+         parseAuthRequired(parsedMap)
       }
+      // Authorization OK; will then subscribe
       else if (parsedMap["type"] == "auth_ok") {
-         if (enableDebug) log.debug "type = auth_ok; requesting subscriptions..."
-         // Subscribe to events--not filtering now, but commented out sections below may cover
-         // all that's needed if becomes necessary:
-         sendCommand([id: id[device.id] ?: 2, type: "subscribe_events"/*, event_type: "state_changed"*/])
-         //sendCommand([id: id[device.id] ?: 2, type: "subscribe_events", event_type: "zha_event"])
+         parseAuthOK(parsedMap)
       }
-      //log.trace "id = ${parsedMap['id']}"
       // ***** Regular events: *****
       if (parsedMap["type"] == "event" || parsedMap["event_type"] == "state_changed" ) {
          if (parsedMap.event?.data?.entity_id) {
-            if (enableDebug) "parsing as event..."
+            if (logEnable) "parsing as event..."
             parseDeviceState(parsedMap.event)
          }
-         else if  (parsedMap.data?.entity_id) {
-            if (enableDebug) log.debug "parsing as state change..."
+         else if (parsedMap.data?.entity_id) {
+            if (logEnable) log.debug "parsing as state change..."
             parseDeviceState(parsedMap)
          }
-         // parse(): {"id": 2, "type": "result", "success": false, "error": {"code": "id_reuse", "message": "Identifier values have to increase."}}
+         else if (parsedMap.event?.event_type == "zha_event" && parsedMap.event.data?.device_ieee) {
+            parseButtonEvents(parsedMap.event.event_type, parsedMap.event.data)
+         }
          else if (parsedMap["type"] == "result" && parsedMap["success"] == false && parsedMap.error?.code == "id_reuse") {
             // should also reset ID
+            log.warn "id mismatch; resetting socket (parsedMap = $parsedMap)"
             connectWebSocket()
          }
          else {
@@ -199,12 +201,26 @@ void parse(String description) {
          }
       }
       else {
-         if (enableDebug) log.debug "Skipping because not type=event"
-      }      
+         if (logEnable) log.debug "Skipping because not type=event or event_type=state_changed"
+      }
    }
    else {
-      if (enableDebug) log.debug "Not parsing; map empty"
+      if (logEnable) log.debug "Not parsing; map empty"
    }
+}
+
+void parseAuthRequired(Map parsedMap) {
+   if (logEnable) log.debug "type = auth_required; sending authorization..."
+   sendCommand([type: "auth", access_token: accessToken])
+}
+
+void parseAuthOK(Map parsedMap) {
+   if (logEnable) log.debug "type = auth_ok; requesting subscriptions..."
+   // Subscribe to events--not filtering now, but commented out sections below may cover
+   // all that's needed if becomes necessary:
+   sendCommand([id: id[device.id] ?: 2, type: "subscribe_events"])
+   //sendCommand([id: id[device.id] ?: 2, type: "subscribe_events", event_type: "state_changed"])
+   //sendCommand([id: id[device.id] ?: 2, type: "subscribe_events", event_type: "zha_event"])
 }
 
 void parseDeviceState(Map event) {
@@ -237,7 +253,7 @@ void parseDeviceState(Map event) {
          if (dev == null) {
             break
          }
-         log.warn "${JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(event.data.new_state))}"
+         //log.warn "${JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(event.data.new_state))}"
          if (event.data.new_state.state) {
             String value = (event.data.new_state.state == "on") ? "on" : "off"
             evts << [name: "switch", value: value,
@@ -255,10 +271,10 @@ void parseDeviceState(Map event) {
                      descriptionText: "${dev?.displayName} saturation is $value"]
             }
             else if (event.data.new_state.attributes.rgb_color) {
-               if (enableDebug) log.warn "ignoring rgb color (todo)"
+               if (logEnable) log.warn "ignoring rgb color (todo)"
             }
             else if (event.data.new_state.attributes.xy) {
-               if (enableDebug) log.warn "ignoring xy color (todo)"
+               if (logEnable) log.warn "ignoring xy color (todo)"
             }
          }
          if (event.data.new_state.attributes.color_mode == "color_temp") {
@@ -275,7 +291,6 @@ void parseDeviceState(Map event) {
             evts << [name: "level", value: value,
                   descriptionText: "${dev?.displayName} level is $value"]
          }
-         log.trace "LIGHT evts = $evts"
          break
       case {it in deviceClasses.motion}:
          String dni = "${device.deviceNetworkId}/motion/${entityId}"
@@ -297,24 +312,37 @@ void parseDeviceState(Map event) {
          }
          break
       default:
-         if (enableDebug) log.debug "skipping class $deviceType"
+         if (logEnable) log.debug "skipping class $deviceType"
    }
    // Send events to child device (if found):
    dev?.parse(evts)
 }
 
+void parseButtonEvents(String eventType, Map eventData) {
+   if (logEnable) log.debug "parseButtonEvents(eventType = $eventType, eventData = $eventData)"
+   com.hubitat.app.ChildDeviceWrapper dev
+   if (eventType == "zha_event") {
+      String dni = "${device.deviceNetworkId}/zha_button/${eventData.device_ieee}"
+      dev = getChildDevice(dni); if (dev == null) return
+      dev.buttonParse(eventType, eventData)
+   }
+   else {
+      if (logEnable) log.debug "Skipping unknown eventType $eventType"
+   }
+}
+
 void sendCommand(Map command) {
-   if (enableDebug) log.debug "sendCommand($command)"
+   if (logEnable) log.debug "sendCommand($command)"
    //log.trace "id = ${id[device.id]}"
    id[device.id] = id[device.id] ? id[device.id] + 1 : 2
    if (!(command.id) && !(command.type == "auth")) command += [id: id[device.id]]
    String msg = JsonOutput.toJson(command)
-   if (enableDebug) log.debug "sendCommand JSON: $msg"
+   if (logEnable) log.debug "sendCommand JSON: $msg"
    interfaces.webSocket.sendMessage(msg)
 }
 
 void refresh() {
-   if (enableDebug) log.debug "refresh()"
+   if (logEnable) log.debug "refresh()"
    Map params = [
       uri: useSecurity ? "https://${ipAddress}:${port}/api/states" : "http://${ipAddress}:${port}/api/states",
       contentType: "application/json",
@@ -337,7 +365,7 @@ void refresh() {
  * @param deviceSelector Device selector/type, e.g., "contact" or "switch" (from deviceSelectors field keys)
  */
 void fetchDevices(String deviceClass) {
-   if (enableDebug) log.debug "fetchDevices($deviceClass)"
+   if (logEnable) log.debug "fetchDevices($deviceClass)"
    Map params = [
       uri: "http://${ipAddress}:${port}/api/states",
       contentType: "application/json",
@@ -354,7 +382,7 @@ void fetchDevices(String deviceClass) {
 }
 
 void fetchEvents() {
-   if (enableDebug) log.debug "fetchEvents()"
+   if (logEnable) log.debug "fetchEvents()"
    Map params = [
       uri: "http://${ipAddress}:${port}/api/events",
       contentType: "application/json",
@@ -372,16 +400,16 @@ void fetchEvents() {
 
 // Callback for fetchDevices(), above -- filter list to devices of specific type, then store in cache
 private void parseFetchDevicesResponse(resp, Map data) {
-   if (enableDebug) log.debug "parseFetchDevicesResponse(${resp.json} ..., data: $data)"
+   if (logEnable) log.debug "parseFetchDevicesResponse(${resp.json} ..., data: $data)"
    if (resp.status < 300) {
       if (resp.getJson()) {
          Map<String,String> devices = [:]
          resp.json.findAll(deviceSelectors[data.deviceClass].detectionClosure)?.each {
-               if (enableDebug) log.debug "Critera matched for entity ${it.entity_id}"
+               if (logEnable) log.debug "Critera matched for entity ${it.entity_id}"
                else { log.warn it }
                devices[it.entity_id] = it.attributes?.friendly_name ?: it.entity_id
          }
-         if (enableDebug) log.debug "Finished finding devices; devices = $devices"
+         if (logEnable) log.debug "Finished finding devices; devices = $devices"
          this."${data.deviceClass}Cache"[device.id] = devices
       }
       else {
@@ -400,8 +428,8 @@ private void parseFetchDevicesResponse(resp, Map data) {
  * @param deviceSelector Device selector/type, e.g., "contact" or "switch" (matches "xyz" of xyzCache field)
  */
 Map getCache(String deviceSelector) {
-   if (enableDebug) log.debug "getCache($deviceSelector)"
-   if (enableDebug) log.debug """Returning ${this."${deviceSelector}Cache"[device.id]}"""
+   if (logEnable) log.debug "getCache($deviceSelector)"
+   if (logEnable) log.debug """Returning ${this."${deviceSelector}Cache"[device.id]}"""
    return this."${deviceSelector}Cache"[device.id]
 }
 
@@ -410,14 +438,14 @@ Map getCache(String deviceSelector) {
  * @param deviceSelector Device selector/type, e.g., "contact" or "switch" (matches "xyz" of xyzCache field)
  */
 void clearCache(String deviceSelector) {
-   if (enableDebug) log.debug "clearCache($deviceSelector)"
+   if (logEnable) log.debug "clearCache($deviceSelector)"
    this."${deviceSelector}Cache"[device.id] = [:]
 }
 
 private void doSendEvent(String eventName, eventValue) {
-   //if (enableDebug) log.debug ("Creating event for $eventName...")
+   //if (logEnable) log.debug ("Creating event for $eventName...")
    String descriptionText = "${device.displayName} ${eventName} is ${eventValue}"
-   if (settings.enableDesc) log.info descriptionText
+   if (settings.txtEnable) log.info descriptionText
    sendEvent(name: eventName, value: eventValue, descriptionText: descriptionText)
 }
 
@@ -434,7 +462,7 @@ Map<String,Map<String,Object>> getDeviceSelectors() {
 ///////////////////////////////////////
 
 void componentOn(com.hubitat.app.DeviceWrapper dev) {
-   if (enableDebug) log.debug "componentOn(${dev.displayName})"
+   if (logEnable) log.debug "componentOn(${dev.displayName})"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
@@ -443,7 +471,7 @@ void componentOn(com.hubitat.app.DeviceWrapper dev) {
 }
 
 void componentOff(com.hubitat.app.DeviceWrapper dev) {
-   if (enableDebug) log.debug "componentOff(${dev.displayName})"
+   if (logEnable) log.debug "componentOff(${dev.displayName})"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
@@ -452,12 +480,12 @@ void componentOff(com.hubitat.app.DeviceWrapper dev) {
 }
 
 void componentRefresh(com.hubitat.app.DeviceWrapper dev) {
-   if (enableDebug) log.debug "componentRefresh(${dev.displayName})"
+   if (logEnable) log.debug "componentRefresh(${dev.displayName})"
    log.trace "not implemented: componentRefresh for ${dev.displayName}"
 }
 
 void componentSetLevel(com.hubitat.app.DeviceWrapper dev, Number level, Number transitionTime=null) {
-   if (enableDebug) log.debug "componentSetLevel(${dev.displayName}, $level)"
+   if (logEnable) log.debug "componentSetLevel(${dev.displayName}, $level)"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
@@ -468,7 +496,7 @@ void componentSetLevel(com.hubitat.app.DeviceWrapper dev, Number level, Number t
 }
 
 void componentStartLevelChange(com.hubitat.app.DeviceWrapper dev, String direction) {
-   if (enableDebug) log.debug "componentStartLevelChange(${dev.displayName}, $direction)"
+   if (logEnable) log.debug "componentStartLevelChange(${dev.displayName}, $direction)"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
@@ -478,7 +506,7 @@ void componentStartLevelChange(com.hubitat.app.DeviceWrapper dev, String directi
 }
 
 void componentStopLevelChange(com.hubitat.app.DeviceWrapper dev) {
-   if (enableDebug) log.debug "componentStopLevelChange(${dev.displayName})"
+   if (logEnable) log.debug "componentStopLevelChange(${dev.displayName})"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
@@ -489,7 +517,7 @@ void componentStopLevelChange(com.hubitat.app.DeviceWrapper dev) {
 }
 
 void componentSetColorTemperature(com.hubitat.app.DeviceWrapper dev, Number colorTemperature, Number level=null, Number transitionTime=null) {
-   if (enableDebug) log.debug "componentSetColorTemperature(${dev.displayName}, $colorTemperature, $level, $transitionTime)"
+   if (logEnable) log.debug "componentSetColorTemperature(${dev.displayName}, $colorTemperature, $level, $transitionTime)"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
@@ -501,7 +529,7 @@ void componentSetColorTemperature(com.hubitat.app.DeviceWrapper dev, Number colo
 }
 
 void componentSetColor(com.hubitat.app.DeviceWrapper dev, Map colorMap) {
-   if (enableDebug) log.debug "componentSetColor(${dev.displayName}, $colorMap)"
+   if (logEnable) log.debug "componentSetColor(${dev.displayName}, $colorMap)"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
@@ -513,7 +541,7 @@ void componentSetColor(com.hubitat.app.DeviceWrapper dev, Map colorMap) {
 }
 
 void componentSetHue(com.hubitat.app.DeviceWrapper dev, Number hue) {
-   if (enableDebug) log.debug "componentSetHue(${dev.displayName}, $hue)"
+   if (logEnable) log.debug "componentSetHue(${dev.displayName}, $hue)"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
@@ -523,7 +551,7 @@ void componentSetHue(com.hubitat.app.DeviceWrapper dev, Number hue) {
 }
 
 void componentSetSaturation(com.hubitat.app.DeviceWrapper dev, Number sat) {
-   if (enableDebug) log.debug "componentSetSaturation(${dev.displayName}, $sat)"
+   if (logEnable) log.debug "componentSetSaturation(${dev.displayName}, $sat)"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    String domain = entityId.tokenize(".")[0]
@@ -533,7 +561,7 @@ void componentSetSaturation(com.hubitat.app.DeviceWrapper dev, Number sat) {
 }
 
 void componentSpeak(com.hubitat.app.DeviceWrapper dev, String text, Number volume, String voice, String service=null) {
-   if (enableDebug) log.debug "componentSpeak(${dev.displayName}, $text, $volume = null, $voice = null)"
+   if (logEnable) log.debug "componentSpeak(${dev.displayName}, $text, $volume = null, $voice = null)"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
    String entityId = dev.deviceNetworkId.tokenize("/")[3]
    Map cmd = [type: "call_service", service: service ?: "google_translate_say", domain: "tts", service_data: [entity_id: entityId, message: text]]
