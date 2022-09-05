@@ -306,7 +306,6 @@ void parseDeviceState(Map event) {
                   descriptionText: "${dev?.displayName} motion is $value"]
          break
       case "device_tracker":
-         log.trace "DEVICE_TRACKER: ${JsonOutput.toJson(event.data)}"
          String dni = "${device.deviceNetworkId}/presence/${entityId}"
          dev = getChildDevice(dni); if (dev == null) break
          String value = (event.data.new_state.state == "home") ? "present" : "not present"

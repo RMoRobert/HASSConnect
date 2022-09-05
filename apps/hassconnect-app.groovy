@@ -277,7 +277,7 @@ def pageManageHub() {
       section("Other Options") {
          href name: "hrefReAddHub", title: "Edit hub IP, port, or access token",
                description: "", page: "pageAddHub"
-         input name: "deleteDevicesOnUninstall", type: "bool", title: "Delete devices created by app (Bridge, light, group, and scene) if uninstalled", defaultValue: true
+         input name: "deleteDevicesOnUninstall", type: "bool", title: "Delete devices created by app (switches, sensors, \"hub,\" etc.) if app uninstalled", defaultValue: true
          input name: "enableDebug", type: "bool", title: "Enable debug logging", defaultValue: true
       }
    }
