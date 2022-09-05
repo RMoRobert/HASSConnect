@@ -13,12 +13,17 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2021-07-18
+ *  Last modified: 2022-01-02
  *
  *  Changelog:
+ *  v0.9.1  - (Beta) Add Alexa Media Player support
  *  v0.9    - (Beta) Initial Public Release -- message/text only, no voice or volume yet supported
  */ 
  
+import groovy.transform.Field
+
+@Field static final Integer autoDisableDebugMinutes = 30
+
 metadata {
    definition (name: "HASSConnect Media/Speech Device", namespace: "RMoRobert", author: "Robert Morris", importUrl: "https://raw.githubusercontent.com/RMoRobert/HASSConnect/main/drivers/hassconnect-media-speech.groovy") {
       capability "Actuator"
@@ -28,7 +33,8 @@ metadata {
    }
       
 preferences {
-      input name: "ttsService", type: "string", title: "TTS service (default: google_translate_say)", defaultValue: "google_translate_say"
+      input name: "ttsService", type: "string", title: "TTS service (not recommended to change from default; example: tts.google_translate_say)", defaultValue: "tts.google_translate_say"
+      input name: "ttsService", type: "string", title: "Service data (not recommended to change from default; example: tts.google_translate_say)", defaultValue: [entity_id: device.deviceNetworkId.tokenize("/")[3]]
       input name: "enableDebug", type: "bool", title: "Enable debug logging", defaultValue: true
       input name: "enableDesc", type: "bool", title: "Enable descriptionText logging", defaultValue: true
    }
@@ -46,19 +52,17 @@ void updated() {
 
 void initialize() {
    if (enableDebug) log.debug "Initializing"
-   Integer disableMinutes = 30
    if (enableDebug) {
-      log.debug "Debug logging will be automatically disabled in ${disableMinutes} minutes"
-      runIn(disableMinutes*60, debugOff)
+      log.debug "Debug logging will be automatically disabled in ${autoDisableDebugMinutes} minutes"
+      runIn(autoDisableDebugMinutes*60, "debugOff")
    }
 }
 
 void debugOn(Boolean autoDisable=true) {
    log.warn "Enabling debug logging..."
-   int disableMinutes = 30
    if (autoDisable) {
-      log.debug "Debug logging will be automatically disabled in ${disableMinutes} minutes"
-      runIn(disableMinutes*60, debugOff)
+      log.debug "Debug logging will be automatically disabled in ${autoDisableDebugMinutes} minutes"
+      runIn(autoDisableDebugMinutes*60, debugOff)
    }
    device.updateSetting("enableDebug", [value:"true", type:"bool"])
 }

@@ -23,9 +23,11 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2021-08-22
+ *  Last modified: 2022-09-05
  * 
  *  Changelog:
+ *  v0.9.4  - Add presence/zone device support
+ *  v0.9.3  - Add Alexa Media Player TTS support
  *  v0.9.2  - Added preliminary button device/event support
  *  v0.9.1  - Added preliminary TTS (Chromecast) support
  *  v0.9    - (Beta) Initial Public Release
@@ -91,7 +93,7 @@ void initialize() {
    Integer disableTime = 1800
    if (enableDebug) {
       log.debug "Debug logging will be automatically disabled in ${disableTime} seconds"
-      runIn(disableTime, debugOff)
+      runIn(disableTime, "debugOff")
    }
 }
 

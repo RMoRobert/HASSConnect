@@ -1,7 +1,7 @@
 /**
  * =============================  HASSConnect Home Assistant Hub (Driver) ===============================
  *
- *  Copyright 2021 Robert Morris
+ *  Copyright 2022 Robert Morris
  * 
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -16,9 +16,11 @@
  *
  *  HASS REST API Reference: https://developers.home-assistant.io/docs/api/rest/
  *
- *  Last modified: 2021-09-25
+ *  Last modified: 2022-09-05
  *
  *  Changelog:
+ *  v0.9.4  - Add presence/zone device support
+ *  v0.9.3  - Add Alexa Media Player TTS support
  *  v0.9.3  - (Beta) Added ZHA button (event) support
  *  v0.9.2  - (Beta) Added RGBW light support, improved reconnection and concurrency issues
  *  v0.9.1  - (Beta) Added media_player entities (preliminary Chromecast support); improved reconnection algorithm
@@ -48,10 +50,13 @@ import java.util.concurrent.ConcurrentHashMap
               driver: "Generic Component Motion Sensor", driverNamespace: "hubitat",
               detectionClosure: {Map m -> m.attributes?.device_class in deviceClasses["motion"]}],
    contact:  [uiName: "contact sensors",
-              driver: "Generic Component Contant Sensor", driverNamespace: "hubitat",
+              driver: "Generic Component Contact Sensor", driverNamespace: "hubitat",
               detectionClosure: {Map m -> m.attributes?.device_class in deviceClasses["contact"]}],
+   presence:  [uiName: "presence sensors",
+              driver: "Generic Component Presence Sensor", driverNamespace: "hubitat",
+              detectionClosure: {Map m -> m.entity_id?.startsWith("device_tracker.")}],
    mediaPlayer:  [uiName: "media players",
-              driver: "HASSConnect Media/Speech Device", driverNamespace: "RMoRobert",
+              driver: "HASSConnect Chromecast TTS Device", driverNamespace: "RMoRobert",
               detectionClosure: {Map m -> m.entity_id?.startsWith("media_player.")},
               uiNotes:"This has been tested only with Google Chromecast devices. Not all features may work with all devices."]
 ]
@@ -67,11 +72,12 @@ import java.util.concurrent.ConcurrentHashMap
 // Name must match deviceSelector string key above plus "Cache", e.g., "motion" + "Cache" = "motionCache"
 // Once accessed by device ID, cache is in Map with [hass_entity_id: hass_friendly_name] format
 // Required for all deviceSelectors keys (so add new entry here if add one to deviceSelectors above)
-@Field static Map<Long,Map<String,String>> switchCache = [:]
-@Field static Map<Long,Map<String,String>> lightRGBWCache = [:]
-@Field static Map<Long,Map<String,String>> motionCache = [:]
-@Field static Map<Long,Map<String,String>> contactCache = [:]
-@Field static Map<Long,Map<String,String>> mediaPlayerCache = [:]
+@Field static ConcurrentHashMap<Long,Map<String,String>> switchCache = [:]
+@Field static ConcurrentHashMap<Long,Map<String,String>> lightRGBWCache = [:]
+@Field static ConcurrentHashMap<Long,Map<String,String>> motionCache = [:]
+@Field static ConcurrentHashMap<Long,Map<String,String>> contactCache = [:]
+@Field static ConcurrentHashMap<Long,Map<String,String>> presenceCache = [:]
+@Field static ConcurrentHashMap<Long,Map<String,String>> mediaPlayerCache = [:]
 
 metadata {
    definition (name: "HASSConnect Home Assistant Hub", namespace: "RMoRobert", author: "Robert Morris",
@@ -299,11 +305,17 @@ void parseDeviceState(Map event) {
          evts << [name: "motion", value: value,
                   descriptionText: "${dev?.displayName} motion is $value"]
          break
+      case "device_tracker":
+         log.trace "DEVICE_TRACKER: ${JsonOutput.toJson(event.data)}"
+         String dni = "${device.deviceNetworkId}/presence/${entityId}"
+         dev = getChildDevice(dni); if (dev == null) break
+         String value = (event.data.new_state.state == "home") ? "present" : "not present"
+         evts << [name: "presence", value: value,
+                  descriptionText: "${dev?.displayName} presence is $value"]
+         break
       case "media_player":
          String dni = "${device.deviceNetworkId}/mediaPlayer/${entityId}"
          dev = getChildDevice(dni); if (dev == null) break
-         String
-         log.warn event.data
          if (event.data.new_state.state in ["on", "idle"]) value = "on"
          else if (event.data.new_state.state == "off") value = "off"
          if (value) {
@@ -359,7 +371,7 @@ void refresh() {
 
 // ----------- Device-fetching methods -------------
 
-/**
+/**+
  * Intended to be called from parent app to request that this driver fetch and cache devices of
  * specifc type, e.g., all motion sensors or switches.
  * @param deviceSelector Device selector/type, e.g., "contact" or "switch" (from deviceSelectors field keys)
