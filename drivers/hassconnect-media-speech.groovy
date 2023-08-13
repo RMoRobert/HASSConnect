@@ -1,6 +1,6 @@
 /**
  * =======================================================================================
- *  Copyright 2021 Robert Morris
+ *  Copyright 2021-2023 Robert Morris
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -23,6 +23,9 @@
 import groovy.transform.Field
 
 @Field static final Integer autoDisableDebugMinutes = 30
+@Field static final String defaultTTSServiceDomain = "tts"
+@Field static final String defaultTTSServiceName = "speak"
+@Field static final String defaultTargetEntityId = "tts.google_en_com"
 
 metadata {
    definition (name: "HASSConnect Media/Speech Device", namespace: "RMoRobert", author: "Robert Morris", importUrl: "https://raw.githubusercontent.com/RMoRobert/HASSConnect/main/drivers/hassconnect-media-speech.groovy") {
@@ -33,8 +36,9 @@ metadata {
    }
       
 preferences {
-      input name: "ttsService", type: "string", title: "TTS service (not recommended to change from default; example: tts.google_translate_say)", defaultValue: "tts.google_translate_say"
-      input name: "ttsService", type: "string", title: "Service data (not recommended to change from default; example: tts.google_translate_say)", defaultValue: [entity_id: device.deviceNetworkId.tokenize("/")[3]]
+      input name: "ttsServiceDomain", type: "string", title: "TTS service domain [default: tts]", defaultValue: defaultTTSServiceDomain
+      input name: "ttsServiceName", type: "string", title: "TTS service name [default: speak]", defaultValue: defaultTTSServiceName
+      input name: "targetEntityId", type: "string", title: "Target entity ID (media player entity ID will be same as device, extracted from DNI) [default: tts.google_en_com]", defaultValue: defaultTargetEntityId
       input name: "enableDebug", type: "bool", title: "Enable debug logging", defaultValue: true
       input name: "enableDesc", type: "bool", title: "Enable descriptionText logging", defaultValue: true
    }
@@ -115,5 +119,8 @@ void refresh() {
 void speak(String text, Number volume = null, String voice = null) {
    // NOTE: volume and voice are currently ignored--not yet implemented
    if (enableDebug) log.debug "speak($text, $volume, $voice)"
-   parent.componentSpeak(this.device, text, volume, voice, settings.ttsService)
+   String targetEntityId = settings.targetEntityId ?: defaultTargetEntityId
+   parent.componentSpeak(
+      this.device, text, volume, voice, settings.ttsServiceDomain, settings.ttsServiceName, targetEntityId
+   )
 }

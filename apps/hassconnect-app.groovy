@@ -1,7 +1,7 @@
 /**
  * ===========================  HASSConnect - Home Assistant Integration =========================
  *
- *  Copyright 2021 Robert Morris
+ *  Copyright 2021-2023 Robert Morris
  *
  *  DESCRIPTION:
  *  Community-developed integration for importing Home Assistant devices into Hubitat. (Note: this

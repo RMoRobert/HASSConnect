@@ -2,10 +2,10 @@
    "packageName": "HASSConnect - Home Assistant Integration",
    "minimumHEVersion": "2.2.6",
    "author": "Robert Morris",
-   "dateReleased": "2021-07-18",
+   "dateReleased": "2023-08-13",
    "communityLink": "https://community.hubitat.com/t/COMING-SOON",
    "licenseFile": "",
-   "releaseNotes": "Initial release. Beta quality; see forum thread for more details.",
+   "releaseNotes": "0.9.1 Media/Speech: Update to non-legacy TTS service in HASS\n\nBeta quality; see forum thread for more details.",
    "apps": [
       {
          "id": "c497b8b-e3ae-4d91-85b6-96b8b047b094",
@@ -32,7 +32,7 @@
          "name": "HASSConnect Media/Speech Device",
          "namespace": "RMoRobert",
          "location": "https://raw.githubusercontent.com/RMoRobert/HASSConnect/main/drivers/hasconnect-media-speech.groovy",
-         "version": "0.9.0",
+         "version": "0.9.1",
          "required": true
       }
    ]

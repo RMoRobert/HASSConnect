@@ -1,7 +1,7 @@
 /**
  * =============================  HASSConnect Home Assistant Hub (Driver) ===============================
  *
- *  Copyright 2022 Robert Morris
+ *  Copyright 2022-2023 Robert Morris
  * 
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -230,7 +230,7 @@ void parseAuthOK(Map parsedMap) {
 }
 
 void parseDeviceState(Map event) {
-   log.debug "parseDeviceState($event)"
+   if (logEnable) log.debug "parseDeviceState($event)"
    //log.trace JsonOutput.prettyPrint(JsonOutput.toJson(event))
    List<Map> evts = []
    com.hubitat.app.ChildDeviceWrapper dev
@@ -299,7 +299,6 @@ void parseDeviceState(Map event) {
          }
          break
       case {it in deviceClasses.motion}:
-         String dni = "${device.deviceNetworkId}/motion/${entityId}"
          dev = getChildDevice(dni); if (dev == null) break
          String value = (event.data.new_state.state == "on") ? "active" : "inactive"
          evts << [name: "motion", value: value,
@@ -571,10 +570,16 @@ void componentSetSaturation(com.hubitat.app.DeviceWrapper dev, Number sat) {
    sendCommand(cmd)
 }
 
-void componentSpeak(com.hubitat.app.DeviceWrapper dev, String text, Number volume, String voice, String service=null) {
+void componentSpeak(com.hubitat.app.DeviceWrapper dev, String text, Number volume, String voice, String serviceDomain=null, String serviceName=null, String targetEntityId=null) {
    if (logEnable) log.debug "componentSpeak(${dev.displayName}, $text, $volume = null, $voice = null)"
    // DNI in format "Hc/appID/DomainOrDeviceType/EntityID", so can split on "/" to get entity_id:
-   String entityId = dev.deviceNetworkId.tokenize("/")[3]
-   Map cmd = [type: "call_service", service: service ?: "google_translate_say", domain: "tts", service_data: [entity_id: entityId, message: text]]
+   String mediaPlayerEntityId = dev.deviceNetworkId.tokenize("/")[3]
+   Map cmd = [
+      type: "call_service",
+      domain: serviceDomain ?: "tts",
+      service: serviceName ?: "speak",
+      service_data: [media_player_entity_id: mediaPlayerEntityId, message: text],
+      target: [entity_id: targetEntityId ?: "tts.google_en_com"]
+   ]
    sendCommand(cmd)
 }
